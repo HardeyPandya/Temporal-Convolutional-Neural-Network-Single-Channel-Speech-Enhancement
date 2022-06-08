@@ -6,7 +6,7 @@ import torch
 
 from trainer.base_trainer import BaseTrainer
 from util.metrics import compute_PESQ, compute_STOI
-from util.utils import synthesis_noisy_y,sliceframe
+from util.utils import synthesis_noisy_y,sliceframe, OverlapAndAdd, compLossMask
 
 plt.switch_backend("agg")
 
@@ -36,9 +36,16 @@ class Trainer(BaseTrainer):
             
             clean_mag = clean_mag.float().to(self.device)
             pred_clean = self.model(noisy_mag)
-            loss = self.loss_function(pred_clean, clean_mag, n_frames_list)
+           
+            loss_mask = compLossMask(clean_mag,n_frames_list)
+            
+            loss = self.loss_function(outputs=pred_clean, labels=clean_mag, loss_mask=loss_mask, nframes=n_frames_list)
+          
             loss_total += loss
-
+            print("Loss: ")
+            #print(noisy_mag.shape)
+            #print(pred_clean.shape)
+            print(loss_total)
             loss.backward()
             self.optimizer.step()
 
@@ -46,35 +53,49 @@ class Trainer(BaseTrainer):
 
     @torch.no_grad()
     def _validation_epoch(self, epoch):
-        visualize_audio_limit = self.validation_custom_config["visualize_audio_limit"]
-        visualize_waveform_limit = self.validation_custom_config["visualize_waveform_limit"]
-        visualize_spectrogram_limit = self.validation_custom_config["visualize_spectrogram_limit"]
-        
+       
         stoi_c_n = []
         stoi_c_d = []
         pesq_c_n = []
         pesq_c_d = []
-
+        print("hello")
         for i, (noisy_y, clean_y, name) in enumerate(self.validation_dataloader):
             assert len(name) == 1, "The batch size of validation dataloader must be 1."
             name = name[0]
+            noisy_y_np = noisy_y
+            noisy_y=sliceframe(noisy_y)
+            
+            noisy_y=torch.tensor(noisy_y)
+            noisy_y=noisy_y.float().to(self.device)
+            noisy_y = noisy_y[None,:,:]
 
-            noisy_y = noisy_y.numpy().reshape(-1)
-            clean_y = clean_y.numpy().reshape(-1)
 
-            noisy_mag = sliceframe(noisy_y)
+            
+            clean_y=clean_y.float()
+            
+            # noisy_y = noisy_y.reshape(-1)
+            clean_y = clean_y.reshape(-1)
+            
+            print("pred_clean: ")
+            print(noisy_y.shape)
             pred_clean = self.model(noisy_y)
-
-          
-            min_len = min(len(noisy_y), len(pred_clean_y), len(clean_y))
-            noisy_y = noisy_y[:min_len]
+           
+            pred_clean_y = OverlapAndAdd(pred_clean.cpu().numpy(),160)
+            noisy_y_np = noisy_y_np.numpy().reshape(-1)
+            clean_y = clean_y.numpy().reshape(-1)
+            pred_clean_y = pred_clean_y.reshape(-1)
+            min_len = min(len(noisy_y_np), len(pred_clean_y), len(clean_y))
+            noisy_y_np = noisy_y_np[:min_len]
             pred_clean_y = pred_clean_y[:min_len]
             clean_y = clean_y[:min_len]
+
+           
             
             # Metrics
-            stoi_c_n.append(compute_STOI(clean_y, noisy_y, sr=16000))
+            stoi_c_n.append(compute_STOI(clean_y, noisy_y_np, sr=16000))
             stoi_c_d.append(compute_STOI(clean_y, pred_clean_y, sr=16000))
-            pesq_c_n.append(compute_PESQ(clean_y, noisy_y, sr=16000))
+            
+            pesq_c_n.append(compute_PESQ(clean_y, noisy_y_np, sr=16000))
             pesq_c_d.append(compute_PESQ(clean_y, pred_clean_y, sr=16000))
 
         get_metrics_ave = lambda metrics: np.sum(metrics) / len(metrics)
