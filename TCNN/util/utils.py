@@ -10,6 +10,11 @@ import numpy as np
 import torch
 from torch.nn.utils.rnn import pad_sequence
 
+def compLossMask(inp, nframes):
+    loss_mask = torch.zeros_like(inp).requires_grad_(False) 
+    for j, seq_len in enumerate(nframes):
+        loss_mask.data[j, :, 0:seq_len] += 1.0
+    return loss_mask
 
 def sliceframe(in_sig):
     frame_size = 320
@@ -31,6 +36,25 @@ def sliceframe(in_sig):
         start = start + frame_shift
         end = start + frame_size
     return a   
+
+def OverlapAndAdd(inputs,frame_shift):
+        nframes = inputs.shape[-2]
+        print(nframes)
+        frame_size = inputs.shape[-1]
+        print(frame_size)
+        frame_step = frame_shift
+        sig_length = (nframes - 1) * frame_step + frame_size
+        sig = np.zeros(list(inputs.shape[:-2]) + [sig_length], dtype=inputs.dtype)
+        ones = np.zeros_like(sig)
+        start = 0
+        end = start + frame_size
+        for i in range(nframes):
+            sig[..., start:end] += inputs[..., i, :]
+            ones[..., start:end] += 1.
+            start = start + frame_step
+            end = start + frame_size
+        return sig / ones
+
 
 
 class ExecutionTime:
@@ -55,7 +79,7 @@ def find_aligned_wav_files(dir_a, dir_b, limit=0, offset=0):
     length = len(wav_paths_in_dir_a)
 
   
-    assert len(wav_paths_in_dir_a) == len(wav_paths_in_dir_b) > 0, f"目录 {dir_a} 和目录 {dir_b} 文件数量不同或目录为空"
+    assert len(wav_paths_in_dir_a) == len(wav_paths_in_dir_b) > 0, f"{dir_a}  {dir_b} "
 
  
     for wav_path_a, wav_path_b in zip(wav_paths_in_dir_a, wav_paths_in_dir_b):
@@ -213,7 +237,7 @@ def synthesis_noisy_y(clean_y, noise_y, snr):
     assert len(clean_y) > 0 and len(noise_y) > 0, f"The length of the noise file is {len(noise_y)}, and the length of the clean file is {len(clean_y)}."
     assert type(snr) == str, "Specify the snr of the string type."
 
-    if len(clean_y) > len(noise_y):
+    if len(clean_y) >= len(noise_y):
       
         pad_factor = len(clean_y) // len(noise_y)  
         padded_noise_y = noise_y
@@ -229,6 +253,28 @@ def synthesis_noisy_y(clean_y, noise_y, snr):
 
     noisy_y = add_noise_for_waveform(clean_y, noise_y, int(snr))
     return clean_y, noise_y, noisy_y
+
+def prepare_device(n_gpu: int, cudnn_deterministic=False):
+    """Choose to use CPU or GPU depend on "n_gpu".
+    Args:
+        n_gpu(int): the number of GPUs used in the experiment.
+            if n_gpu is 0, use CPU;
+            if n_gpu > 1, use GPU.
+        cudnn_deterministic (bool): repeatability
+            cudnn.benchmark will find algorithms to optimize training. if we need to consider the repeatability of experiment, set use_cudnn_deterministic to True
+    """
+    if n_gpu == 0:
+        print("Using CPU in the experiment.")
+        device = torch.device("cpu")
+    else:
+        if cudnn_deterministic:
+            print("Using CuDNN deterministic mode in the experiment.")
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+
+        device = torch.device("cuda:0")
+
+    return device
 
 
 def prepare_empty_dir(dirs, resume=False):
